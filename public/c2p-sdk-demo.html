@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Click to Pay — SDK / Wallet demo</title>
+  <!--
+    Standalone Click to Pay SDK demo (wallet/DCF step only).
+
+    What it does:
+      • loads click-to-pay.min.js from the gateway
+      • configures the SDK with a Session ID you created in Postman (steps 1-3)
+      • lets the shopper pick a saved card (OTP + DCF handled by the SDK)
+      • prints the correlationId + scheme from onComplete, with Copy buttons
+
+    What it does NOT do (on purpose):
+      • create the session  -> Postman step 1-3
+      • update-from-wallet / authenticate / pay -> Postman steps 4-7
+      (the server-side calls need the API password and must not live in a web page)
+
+    HOW TO RUN: serve this over http on a REGISTERED origin, e.g.
+        npx serve .        (then open http://localhost:3000/c2p-sdk-demo.html)
+      or drop it in web/public and open http://localhost:5173/c2p-sdk-demo.html
+    Opening it directly as file:// gives origin "null", which the card
+    networks reject. The "Merchant URL" field below must be an origin your
+    DPA is registered for (defaults to this page's origin).
+
+    Credentials note: only the public Merchant ID + gateway host are used here.
+    The API password is NEVER needed by the SDK and is not in this file.
+  -->
+  <style>
+    :root { --mc: #ff5f00; --ink: #1a1a1a; --muted: #6b7280; --line: #e5e7eb; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+           margin: 0; background: #f5f6f8; color: var(--ink); }
+    .wrap { max-width: 560px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 20px; margin: 0 0 2px; }
+    .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 14px;
+            padding: 18px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.04); }
+    label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: .3px; color: var(--muted); margin: 10px 0 4px; }
+    input { width: 100%; padding: 10px 12px; border: 1.5px solid var(--line);
+            border-radius: 9px; font-size: 14px; font-family: 'SF Mono', ui-monospace, monospace; }
+    .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+    button { width: 100%; padding: 13px; font-size: 15px; font-weight: 700; border: none;
+             border-radius: 11px; background: var(--mc); color: #fff; cursor: pointer; margin-top: 14px; }
+    button:hover { background: #e65500; }
+    button.secondary { background: #fff; color: var(--ink); border: 1.5px solid var(--line); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    #c2p-cardList, #c2p-otp, #c2p-dcf { margin-top: 12px; }
+    .result { display: none; background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 12px; padding: 16px; }
+    .result.show { display: block; }
+    .result h3 { margin: 0 0 10px; font-size: 14px; color: #065f46; }
+    .kv { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .kv label { margin: 0; min-width: 92px; }
+    .kv input { font-size: 12px; background: #fff; }
+    .kv .copy { width: auto; margin: 0; padding: 8px 12px; font-size: 12px; background: #10b981; }
+    .hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 8px 0 0; }
+    .log { font: 11px/1.4 ui-monospace, monospace; background: #0b1020; color: #cfe3ff;
+           padding: 10px 12px; border-radius: 10px; max-height: 180px; overflow: auto;
+           white-space: pre-wrap; word-break: break-word; }
+    .badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px;
+             border-radius: 999px; background: #fff3e9; color: var(--mc); margin-left: 6px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Click to Pay — SDK demo <span class="badge">wallet step only</span></h1>
+    <p class="sub">Paste a Session ID from Postman (steps 1–3), pick a card, then copy the
+      <code>correlationId</code> + <code>scheme</code> back into Postman for steps 4–7.</p>
+
+    <!-- ── Config ── -->
+    <div class="card">
+      <label>Session ID <span style="color:var(--mc)">*</span> (from Postman "Create Session")</label>
+      <input id="sessionId" placeholder="SESSION0002..." />
+
+      <div class="row">
+        <div>
+          <label>Amount</label>
+          <input id="amount" value="100.00" />
+        </div>
+        <div>
+          <label>Currency</label>
+          <input id="currency" value="USD" />
+        </div>
+        <div>
+          <label>API version</label>
+          <input id="version" value="100" />
+        </div>
+      </div>
+
+      <label>Merchant ID</label>
+      <input id="merchantId" value="Razorpay01" />
+
+      <label>Gateway host</label>
+      <input id="gatewayHost" value="mtf.gateway.mastercard.com" />
+
+      <label>Merchant URL (must be a registered origin)</label>
+      <input id="merchantUrl" />
+
+      <label>Payer email (optional — enables identity lookup)</label>
+      <input id="email" placeholder="you@example.com" />
+
+      <button id="configureBtn">Load SDK &amp; Configure</button>
+    </div>
+
+    <!-- ── SDK render targets + actions ── -->
+    <div class="card">
+      <div id="c2p-cardList"></div>
+      <div id="c2p-otp"></div>
+      <div id="c2p-dcf"></div>
+      <button id="lookupBtn" class="secondary" disabled>Lookup by email</button>
+      <button id="existingBtn" disabled>Checkout with existing card</button>
+    </div>
+
+    <!-- ── Result ── -->
+    <div class="card result" id="resultCard">
+      <h3>✓ onComplete — paste these into Postman</h3>
+      <div class="kv">
+        <label>correlationId</label>
+        <input id="outCorrelation" readonly />
+        <button class="copy" data-target="outCorrelation">Copy</button>
+      </div>
+      <div class="kv">
+        <label>scheme</label>
+        <input id="outScheme" readonly />
+        <button class="copy" data-target="outScheme">Copy</button>
+      </div>
+      <p class="hint">Set them as the <code>correlationId</code> and <code>scheme</code> collection
+        variables in Postman, then run step 4 (Update Session From Wallet) → 5 → 6 → 7.</p>
+    </div>
+
+    <!-- ── Log ── -->
+    <div class="card">
+      <label>SDK log</label>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+
+  <script>
+    var $ = function (id) { return document.getElementById(id); };
+    // Default merchant URL to this page's origin (where you serve it from).
+    $('merchantUrl').value = window.location.origin === 'null' ? 'http://localhost:5173' : window.location.origin;
+
+    // Hard stop if opened via file:// — origin is "null"/"file://", which the card
+    // networks reject, so configure()'s handshake never completes (no onStateChange,
+    // then the "configure() did not complete" error). Must be served over http.
+    if (window.location.protocol === 'file:') {
+      var warn = document.createElement('div');
+      warn.className = 'card';
+      warn.style.cssText = 'background:#fef2f2;border-color:#fecaca;color:#991b1b;';
+      warn.innerHTML = '<strong>⚠ Open this over http, not file://</strong>'
+        + '<p style="margin:8px 0 0;font-size:13px;line-height:1.5">'
+        + 'You opened this file directly, so the browser origin is <code>null</code> — the card '
+        + 'networks reject it and the SDK can never finish initialising. '
+        + 'Run <code>npm run dev</code> in <code>/web</code> and open '
+        + '<code>http://localhost:5173/c2p-sdk-demo.html</code> instead.</p>';
+      var wrap = document.querySelector('.wrap');
+      wrap.insertBefore(warn, wrap.children[2]);
+      var cfgBtn = document.getElementById('configureBtn');
+      cfgBtn.disabled = true;
+      cfgBtn.textContent = 'Serve over http:// to use';
+    }
+
+    function log(line, obj) {
+      var el = $('log');
+      el.textContent += line + (obj !== undefined ? ' ' + JSON.stringify(obj) : '') + '\n';
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function loadScript(src) {
+      return new Promise(function (resolve, reject) {
+        if (document.querySelector('script[src="' + src + '"]')) return resolve();
+        var s = document.createElement('script');
+        s.src = src; s.async = true;
+        s.onload = resolve;
+        s.onerror = function () { reject(new Error('Failed to load ' + src)); };
+        document.head.appendChild(s);
+      });
+    }
+
+    $('configureBtn').onclick = async function () {
+      var sessionId = $('sessionId').value.trim();
+      if (!sessionId) { alert('Paste a Session ID from Postman first.'); return; }
+
+      var host = $('gatewayHost').value.trim();
+      var scriptUrl = 'https://' + host + '/static/click-to-pay/click-to-pay.min.js';
+      var email = $('email').value.trim();
+
+      this.disabled = true;
+      this.textContent = 'Loading SDK…';
+      try {
+        log('loadScript', { url: scriptUrl });
+        await loadScript(scriptUrl);
+        if (!window.ClickToPay) throw new Error('window.ClickToPay not defined after load');
+
+        // The SDK signals "init complete" via the first onStateChange. configure() does NOT
+        // reliably return a promise in this build, so we wait on that signal (with a timeout
+        // safety net) before enabling checkoutWith* — otherwise the SDK throws
+        // "configure() did not complete. Configuration should be initialized first."
+        var resolveReady = null;
+        var readyPromise = new Promise(function (res) { resolveReady = res; });
+
+        var config = {
+          merchant: {
+            id: $('merchantId').value.trim(),
+            name: 'Click2Pay HTML Demo',
+            url: $('merchantUrl').value.trim()
+          },
+          session: {
+            id: sessionId,
+            wsVersion: Number($('version').value.trim())
+          },
+          order: {
+            amount: Number($('amount').value.trim()),
+            currency: $('currency').value.trim()
+          },
+          interaction: {
+            locale: 'en_US',
+            country: 'USA',
+            billingPreference: 'NONE',
+            collectShippingAddress: false,
+            cardSelectionAction: 'SELECT_AND_PROCEED',
+            suppressPayerInteraction: false,
+            skipDCFInteraction: false
+          },
+          // Documented key is `customer.email`; only sent when provided.
+          customer: email ? { email: email } : undefined,
+          elements: { cardList: 'c2p-cardList', otp: 'c2p-otp', dcf: 'c2p-dcf' },
+          callbacks: {
+            onStateChange: function (change) {
+              log('onStateChange', change.diffState || change);
+              if (resolveReady) { resolveReady(); resolveReady = null; }
+            },
+            onComplete: function (correlationId, scheme) {
+              log('onComplete', { correlationId: correlationId, scheme: scheme });
+              $('outCorrelation').value = correlationId;
+              $('outScheme').value = scheme;
+              $('resultCard').classList.add('show');
+              $('resultCard').scrollIntoView({ behavior: 'smooth' });
+            },
+            onError: function (errInfo) { log('onError', errInfo); }
+          }
+        };
+
+        log('ClickToPay.configure', { mode: email ? 'email' : 'anonymous', session: sessionId });
+        var result = window.ClickToPay.configure(config);
+
+        // Wait until the SDK has actually finished initialising: prefer configure()'s
+        // promise if it returns one, else the first onStateChange — capped at 8s.
+        this.textContent = 'Initialising…';
+        await Promise.race([
+          (result && typeof result.then === 'function') ? result : readyPromise,
+          new Promise(function (res) { setTimeout(res, 8000); })
+        ]);
+
+        log('SDK ready');
+        $('existingBtn').disabled = false;
+        $('lookupBtn').disabled = !email;
+        this.textContent = 'SDK configured ✓';
+      } catch (e) {
+        log('ERROR', { message: e.message });
+        this.disabled = false;
+        this.textContent = 'Load SDK & Configure';
+      }
+    };
+
+    $('existingBtn').onclick = function () {
+      if (!window.ClickToPay) return;
+      log('checkoutWithExistingCard()');
+      window.ClickToPay.checkoutWithExistingCard();
+    };
+
+    $('lookupBtn').onclick = function () {
+      var email = $('email').value.trim();
+      if (!window.ClickToPay || !email) return;
+      log('lookupCustomer', { email: email });
+      window.ClickToPay.lookupCustomer(email);
+    };
+
+    // Copy buttons
+    document.querySelectorAll('.copy').forEach(function (btn) {
+      btn.onclick = function () {
+        var input = $(btn.getAttribute('data-target'));
+        input.select();
+        navigator.clipboard.writeText(input.value).then(function () {
+          var old = btn.textContent; btn.textContent = 'Copied!';
+          setTimeout(function () { btn.textContent = old; }, 1200);
+        });
+      };
+    });
+  </script>
+</body>
+</html>
