@@ -587,7 +587,17 @@ export default function App() {
           onError: (errInfo) => {
             console.error('[C2P] onError:', errInfo);
             logEvent('SDK onError', errInfo);
-            setError(`${errInfo.errorCode}: ${errInfo.errorMessage}`);
+            // The C2P SDK often returns only {errorCode, errorMessage}; dump the
+            // whole payload so any extra fields Mastercard sends are visible
+            // on-screen (no DevTools needed on mobile).
+            const code = errInfo?.errorCode || errInfo?.reason || 'ERROR';
+            const msg = errInfo?.errorMessage || errInfo?.message || '';
+            let detail = '';
+            try {
+              const full = JSON.stringify(errInfo);
+              if (full && full !== '{}') detail = full;
+            } catch { /* ignore non-serialisable payloads */ }
+            setError(`${code}: ${msg}${detail ? `\n${detail}` : ''}`);
             setStage(STAGES.ERROR);
           },
         },

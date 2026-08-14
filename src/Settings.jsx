@@ -10,19 +10,41 @@ import { getSettings, saveSettings, clearSettings } from './settings.js';
 //               used to show placeholder hints of the .env fallback.
 //   onClose   — dismiss without re-fetching.
 //   onSaved   — called after save/reset so the app can re-fetch /api/config.
+// Default API base URL when the merchant hasn't set one (Mastercard MTF).
+const DEFAULT_HOST = 'https://mtf.gateway.mastercard.com/';
+// Derive the API username from the Merchant ID, per gateway convention.
+const deriveUsername = (mid) => (mid.trim() ? `merchant.${mid.trim()}` : '');
+
 export default function Settings({ defaults = {}, onClose, onSaved }) {
   const saved = getSettings();
   const [form, setForm] = useState({
     merchantId: saved.merchantId || '',
     username: saved.username || '',
     password: saved.password || '',
-    host: saved.host || '',
+    host: saved.host || DEFAULT_HOST,
     version: saved.version || '',
   });
   const [showPassword, setShowPassword] = useState(false);
   const [flash, setFlash] = useState(null);
+  // Once the user hand-edits the username, stop auto-syncing it to the Merchant ID.
+  const [usernameEdited, setUsernameEdited] = useState(Boolean(saved.username));
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  // Typing the Merchant ID auto-fills the API Username as `merchant.<id>`,
+  // unless the user has manually overridden the username.
+  const onMerchantId = (e) => {
+    const merchantId = e.target.value;
+    setForm((f) => ({
+      ...f,
+      merchantId,
+      username: usernameEdited ? f.username : deriveUsername(merchantId),
+    }));
+  };
+  const onUsername = (e) => {
+    setUsernameEdited(true);
+    setForm((f) => ({ ...f, username: e.target.value }));
+  };
 
   function handleSave() {
     // Trim everything; drop empty keys so they fall back to the backend .env.
@@ -38,7 +60,8 @@ export default function Settings({ defaults = {}, onClose, onSaved }) {
 
   function handleReset() {
     clearSettings();
-    setForm({ merchantId: '', username: '', password: '', host: '', version: '' });
+    setForm({ merchantId: '', username: '', password: '', host: DEFAULT_HOST, version: '' });
+    setUsernameEdited(false);
     setFlash({ kind: 'ok', msg: 'Cleared — using server defaults again.' });
     onSaved && onSaved();
   }
@@ -65,7 +88,7 @@ export default function Settings({ defaults = {}, onClose, onSaved }) {
             className="settings-input"
             placeholder={defaults.merchantId || 'Enter Merchant ID'}
             value={form.merchantId}
-            onChange={set('merchantId')}
+            onChange={onMerchantId}
           />
 
           <label className="settings-label">API Username</label>
@@ -73,7 +96,7 @@ export default function Settings({ defaults = {}, onClose, onSaved }) {
             className="settings-input"
             placeholder={usernameHint}
             value={form.username}
-            onChange={set('username')}
+            onChange={onUsername}
           />
           <p className="settings-help">Leave blank to use <code>merchant.&lt;Merchant ID&gt;</code>.</p>
 
