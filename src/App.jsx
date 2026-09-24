@@ -2,9 +2,10 @@ import React, { useEffect, useState, useRef } from 'react';
 import { api, loadScript } from './api.js';
 import SequenceDiagram from './SequenceDiagram.jsx';
 import Settings from './Settings.jsx';
+import Storefront, { cartTotal } from './Storefront.jsx';
 
 const STAGES = {
-  STORE: 'STORE',           // ← NEW: e-commerce checkout landing page
+  STORE: 'STORE',           // TechGear storefront (home / shop / product / cart)
   IDLE: 'IDLE',             //   Email entry (Click to Pay flow starts here)
   STARTING: 'STARTING',
   C2P_CONFIGURING: 'C2P_CONFIGURING',
@@ -15,15 +16,6 @@ const STAGES = {
   PAID: 'PAID',
   ERROR: 'ERROR',
 };
-
-// Demo product for the store landing page
-const PRODUCT = {
-  name: 'Aurora Wireless Headphones',
-  variant: 'Midnight Black · ANC Pro',
-  qty: 1,
-  emoji: '🎧',
-};
-const STORE_NAME = 'Test Merchant';
 
 function timeStr(d) {
   return d.toLocaleTimeString([], { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
@@ -301,105 +293,6 @@ function SdkPlaceholder({ id, label, active, hidden }) {
   );
 }
 
-// ── Store-checkout landing page (looks like a real e-commerce site) ──
-function StoreCheckout({ config, onChooseClickToPay, onChooseCard }) {
-  const subtotal = Number(config.amount);
-  const total = subtotal;   // no tax — matches the actual gateway charge
-
-  return (
-    <div className="store">
-      {/* Brand header */}
-      <header className="store-header">
-        <div className="store-brand">
-          <div className="store-logo">N</div>
-          <div>
-            <div className="store-brand-name">{STORE_NAME}</div>
-          </div>
-        </div>
-        <div className="store-secure">
-          <span className="store-secure-dot" />
-          Secure checkout
-        </div>
-      </header>
-
-      <div className="store-grid">
-        {/* Left — Order summary */}
-        <section className="store-summary">
-          <h3 className="store-section-title">Order summary</h3>
-
-          <div className="store-item">
-            <div className="store-item-image">{PRODUCT.emoji}</div>
-            <div className="store-item-meta">
-              <div className="store-item-name">{PRODUCT.name}</div>
-              <div className="store-item-variant">{PRODUCT.variant}</div>
-              <div className="store-item-qty">Qty {PRODUCT.qty}</div>
-            </div>
-            <div className="store-item-price">
-              {subtotal.toFixed(2)} <em>{config.currency}</em>
-            </div>
-          </div>
-
-          <div className="store-totals">
-            <div className="store-total-row">
-              <span>Subtotal</span>
-              <span>{subtotal.toFixed(2)} {config.currency}</span>
-            </div>
-            <div className="store-total-row">
-              <span>Shipping</span>
-              <span className="store-total-free">Free</span>
-            </div>
-            <div className="store-total-row store-total-row--total">
-              <span>Total</span>
-              <span>{total.toFixed(2)} {config.currency}</span>
-            </div>
-          </div>
-        </section>
-
-        {/* Right — Payment methods */}
-        <section className="store-payment">
-          <h3 className="store-section-title">Payment method</h3>
-
-          {/* Primary: Click to Pay */}
-          <button className="ctp-button" onClick={onChooseClickToPay}>
-            <span className="ctp-button-logo">
-              <span className="ctp-arrow">»</span>
-            </span>
-            <span className="ctp-button-text">
-              <span className="ctp-button-title">Click to Pay</span>
-              <span className="ctp-button-sub">Use a saved card — no typing</span>
-            </span>
-            <span className="ctp-button-chevron">→</span>
-          </button>
-
-          {/* Divider */}
-          <div className="store-divider"><span>or pay with a new card</span></div>
-
-          {/* Demo manual card entry */}
-          <div className="card-form">
-            <label className="card-label">Card number</label>
-            <input className="card-input card-input--full" placeholder="1234 1234 1234 1234" disabled />
-            <div className="card-row">
-              <div>
-                <label className="card-label">Expiry</label>
-                <input className="card-input" placeholder="MM / YY" disabled />
-              </div>
-              <div>
-                <label className="card-label">CVV</label>
-                <input className="card-input" placeholder="123" disabled />
-              </div>
-            </div>
-          </div>
-
-          {/* Secondary pay button (also routes to Click to Pay) */}
-          <button className="store-pay-button" onClick={onChooseCard}>
-            Pay {total.toFixed(2)} {config.currency}
-          </button>
-        </section>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [config, setConfig] = useState(null);
   const [stage, setStage] = useState(STAGES.STORE);
@@ -411,6 +304,9 @@ export default function App() {
   const [newCardStatus, setNewCardStatus] = useState(null);  // field errors / status for enrollment form
   const [newCardBusy, setNewCardBusy] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [storeView, setStoreView] = useState({ page: 'home' });
+  const [cart, setCart] = useState([]);
+  const [amount, setAmount] = useState(null);  // cart total locked in when checkout starts
 
   const psConfiguredRef = useRef(false);  // guard against double PaymentSession.configure
   const handledCorrelationRef = useRef(null);  // guard against duplicate onComplete (enroll-then-checkout)
@@ -515,8 +411,8 @@ export default function App() {
     setStage(STAGES.STARTING);
     try {
       const resp = await call('POST', '/api/checkout/start',
-        { amount: config.amount, currency: config.currency },
-        () => api.start(config.amount, config.currency)
+        { amount, currency: config.currency },
+        () => api.start(amount, config.currency)
       );
       setOrder(resp);
 
@@ -534,7 +430,7 @@ export default function App() {
       const configureReady = new Promise((resolve) => { configureReadyResolve = resolve; });
 
       const c2pConfig = {
-        merchant: { id: config.merchantId, name: 'Click2Pay Demo', url: window.location.origin },
+        merchant: { id: config.merchantId, name: 'TechGear', url: window.location.origin },
         session: {
           id: resp.sessionId,
           wsVersion: Number(config.apiVersion),
@@ -762,19 +658,25 @@ export default function App() {
   const isReceipt = stage === STAGES.PAID && payResult?.ok;
   const isStore   = stage === STAGES.STORE;
 
-  // ── Store landing page ─────────────────────────────────────
+  // ── TechGear storefront ─────────────────────────────────────
   if (isStore) {
     return (
-      <div className="layout-store">
-        {gearBtn}
-        {configBanner}
-        <StoreCheckout
-          config={config}
-          onChooseClickToPay={() => setStage(STAGES.IDLE)}
-          onChooseCard={() => setStage(STAGES.IDLE)}
+      <>
+        <Storefront
+          view={storeView}
+          go={setStoreView}
+          cart={cart}
+          setCart={setCart}
+          currency={config.currency}
+          banner={configBanner}
+          gearBtn={gearBtn}
+          onCheckout={() => {
+            setAmount(cartTotal(cart).toFixed(2));
+            setStage(STAGES.IDLE);
+          }}
         />
         {settingsOverlay}
-      </div>
+      </>
     );
   }
 
@@ -788,7 +690,7 @@ export default function App() {
         <div className="receipt-card">
           <div className="receipt-row">
             <span className="receipt-label">Amount</span>
-            <span className="receipt-value receipt-amount">{config.amount} {config.currency}</span>
+            <span className="receipt-value receipt-amount">{amount} {config.currency}</span>
           </div>
           <div className="receipt-row">
             <span className="receipt-label">Order ID</span>
@@ -806,6 +708,8 @@ export default function App() {
 
         <button onClick={() => {
           setStage(STAGES.STORE);
+          setStoreView({ page: 'home' });
+          setCart([]);
           setOrder(null);
           setPayResult(null);
           setError(null);
@@ -823,20 +727,21 @@ export default function App() {
           className="back-link"
           onClick={() => {
             setStage(STAGES.STORE);
+            setStoreView({ page: 'cart' });
             setEvents([]);
             setError(null);
           }}
           title="Back to cart"
         >← Back</button>
         <div className="app-header-dot" />
-        <h1 className="app-title">Click to Pay</h1>
+        <h1 className="app-title">TechGear Checkout</h1>
         <span className="app-subtitle">Hosted Session</span>
       </div>
 
       <div className="info-grid">
         <div className="info-card info-card--wide">
           <span className="info-card-label">Amount</span>
-          <span className="info-card-value info-card-amount">{config.amount} <em>{config.currency}</em></span>
+          <span className="info-card-value info-card-amount">{amount} <em>{config.currency}</em></span>
         </div>
         <div className="info-card info-card--wide">
           <span className="info-card-label">Gateway</span>
@@ -956,7 +861,7 @@ export default function App() {
           <button className="store-pay-button" onClick={submitNewCard} disabled={newCardBusy}>
             {newCardBusy
               ? <><span className="btn-spinner" /> Processing…</>
-              : <>Pay {config.amount} {config.currency} &amp; enrol</>}
+              : <>Pay {amount} {config.currency} &amp; enrol</>}
           </button>
 
           {newCardStatus && <div className="status error">⚠ {newCardStatus}</div>}
