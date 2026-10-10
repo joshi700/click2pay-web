@@ -2,7 +2,8 @@ import React, { useEffect, useState, useRef } from 'react';
 import { api, loadScript } from './api.js';
 import SequenceDiagram from './SequenceDiagram.jsx';
 import Settings from './Settings.jsx';
-import Storefront, { cartTotal } from './Storefront.jsx';
+import Storefront, { cartTotal, money, Icon } from './Storefront.jsx';
+import { CheckoutPage, ReceiptPage } from './CheckoutPages.jsx';
 
 const STAGES = {
   STORE: 'STORE',           // TechGear storefront (home / shop / product / cart)
@@ -280,16 +281,48 @@ function ApiPanel({ events, onClear, collapsible = false, defaultOpen = true }) 
   );
 }
 
-// ── SDK placeholder ──────────────────────────────────────────
-function SdkPlaceholder({ id, label, active, hidden }) {
+// ── Developer view — slide-out drawer with the live API log + flow diagram ──
+function DevDrawer({ open, setOpen, events, onClear, info }) {
+  const [tab, setTab] = useState('network');
+  const calls = groupEvents(events).filter(i => i.kind === 'txn').length;
+
   return (
-    <div
-      id={id}
-      className={`sdk-placeholder ${active ? 'sdk-placeholder--active' : ''}`}
-      data-label={label}
-      // Keep the element in the DOM (the SDK renders into it) but hide it when not wanted.
-      style={hidden ? { display: 'none' } : undefined}
-    />
+    <>
+      <button className="tg-devtab" onClick={() => setOpen(true)} aria-label="Open developer view">
+        <Icon name="code" /> <span className="tg-devtab-label">Developer view</span>
+        {calls > 0 && <span className="tg-devtab-count">{calls}</span>}
+      </button>
+      <div className={`tg-drawer-backdrop ${open ? 'is-open' : ''}`} onClick={() => setOpen(false)} />
+      <aside className={`tg-drawer ${open ? 'is-open' : ''}`} aria-hidden={!open} aria-label="Developer view">
+        <div className="tg-drawer-head">
+          <div>
+            <span className="tg-label">Developer view</span>
+            <h3>Behind the checkout</h3>
+          </div>
+          <button className="tg-icon-btn" onClick={() => setOpen(false)} aria-label="Close developer view">
+            <Icon name="close" />
+          </button>
+        </div>
+        <dl className="tg-drawer-meta">
+          {info.filter(([, v]) => v).map(([k, v]) => (
+            <div key={k}><dt>{k}</dt><dd>{v}</dd></div>
+          ))}
+        </dl>
+        <div className="tg-drawer-tabs" role="tablist">
+          <button role="tab" aria-selected={tab === 'network'} className={tab === 'network' ? 'is-on' : ''} onClick={() => setTab('network')}>
+            Network calls
+          </button>
+          <button role="tab" aria-selected={tab === 'flow'} className={tab === 'flow' ? 'is-on' : ''} onClick={() => setTab('flow')}>
+            Flow diagram
+          </button>
+        </div>
+        <div className="tg-drawer-body">
+          {tab === 'network'
+            ? <ApiPanel events={events} onClear={onClear} />
+            : <div className="tg-drawer-diagram"><SequenceDiagram /></div>}
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -303,10 +336,12 @@ export default function App() {
   const [payResult, setPayResult] = useState(null);
   const [newCardStatus, setNewCardStatus] = useState(null);  // field errors / status for enrollment form
   const [newCardBusy, setNewCardBusy] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [storeView, setStoreView] = useState({ page: 'home' });
   const [cart, setCart] = useState([]);
   const [amount, setAmount] = useState(null);  // cart total locked in when checkout starts
+  const [checkoutLines, setCheckoutLines] = useState([]);  // cart snapshot shown on checkout + receipt
+  const [paidScheme, setPaidScheme] = useState(null);
+  const [devOpen, setDevOpen] = useState(false);
 
   const psConfiguredRef = useRef(false);  // guard against double PaymentSession.configure
   const handledCorrelationRef = useRef(null);  // guard against duplicate onComplete (enroll-then-checkout)
@@ -574,6 +609,7 @@ export default function App() {
   async function completeFlow(orderId, correlationId, scheme, ord) {
     try {
       const sessionId = ord?.sessionId;
+      setPaidScheme(scheme);
       setStage(STAGES.WALLET_LINKING);
       await call('POST', `/api/checkout/${orderId}/wallet`,
         { correlationId, scheme, sessionId },
@@ -597,6 +633,7 @@ export default function App() {
         () => api.pay(orderId, payload)
       );
       setPayResult(resp);
+      if (resp.ok) setCart([]);  // order placed — the receipt shows the checkoutLines snapshot
       setStage(resp.ok ? STAGES.PAID : STAGES.ERROR);
     } catch (e) {
       console.error('[C2P] pay error:', e);
@@ -627,274 +664,116 @@ export default function App() {
     );
   }
 
-  if (!config) return <div className="container">Loading config…</div>;
+  if (!config) return <div className="tg tg-loading">Loading…</div>;
 
-  // ── Configuration settings (browser-stored gateway credentials) ──
-  const gearBtn = (
-    <button
-      className="gear-btn"
-      onClick={() => setShowSettings(true)}
-      title="Configuration settings"
-      aria-label="Configuration settings"
-    >⚙</button>
-  );
-  const settingsOverlay = showSettings ? (
-    <Settings
-      defaults={config}
-      onClose={() => setShowSettings(false)}
-      onSaved={refreshConfig}
-    />
-  ) : null;
-  const configBanner = !config.configured ? (
-    <div className="config-banner">
-      <span>⚠ No API credentials configured — the payment flow will fail until you set them.</span>
-      <button onClick={() => setShowSettings(true)}>Open Settings</button>
-    </div>
-  ) : null;
-
-  // ── Inner checkout column content (shared by both views) ────
-  const sdkActive = stage !== STAGES.IDLE && stage !== STAGES.STARTING && stage !== STAGES.ERROR;
-
-  const isReceipt = stage === STAGES.PAID && payResult?.ok;
-  const isStore   = stage === STAGES.STORE;
-
-  // ── TechGear storefront ─────────────────────────────────────
-  if (isStore) {
-    return (
-      <>
-        <Storefront
-          view={storeView}
-          go={setStoreView}
-          cart={cart}
-          setCart={setCart}
-          currency={config.currency}
-          banner={configBanner}
-          gearBtn={gearBtn}
-          onCheckout={() => {
-            setAmount(cartTotal(cart).toFixed(2));
-            setStage(STAGES.IDLE);
-          }}
-        />
-        {settingsOverlay}
-      </>
-    );
+  // Any store navigation abandons an in-progress checkout (or leaves the receipt).
+  function goStore(next) {
+    if (stage !== STAGES.STORE) {
+      setStage(STAGES.STORE);
+      setOrder(null);
+      setPayResult(null);
+      setError(null);
+      setEvents([]);
+      setDevOpen(false);
+    }
+    setStoreView(next);
+    window.scrollTo({ top: 0 });
   }
 
-  const checkoutColumn = isReceipt ? (
-    <div className="container">
-      <div className="receipt">
-        <div className="receipt-icon">✓</div>
-        <h2 className="receipt-title">Payment Approved</h2>
-        <p className="receipt-subtitle">Your payment was processed successfully.</p>
+  const openSettings = () => goStore({ page: 'settings' });
 
-        <div className="receipt-card">
-          <div className="receipt-row">
-            <span className="receipt-label">Amount</span>
-            <span className="receipt-value receipt-amount">{amount} {config.currency}</span>
-          </div>
-          <div className="receipt-row">
-            <span className="receipt-label">Order ID</span>
-            <span className="receipt-value receipt-mono">{order?.orderId}</span>
-          </div>
-          <div className="receipt-row">
-            <span className="receipt-label">Gateway Code</span>
-            <span className="receipt-value receipt-badge">{payResult.gatewayCode}</span>
-          </div>
-          <div className="receipt-row">
-            <span className="receipt-label">Gateway</span>
-            <span className="receipt-value receipt-mono">{config.gatewayHost}</span>
-          </div>
-        </div>
-
-        <button onClick={() => {
-          setStage(STAGES.STORE);
-          setStoreView({ page: 'home' });
-          setCart([]);
-          setOrder(null);
-          setPayResult(null);
-          setError(null);
-          setEvents([]);
-          setEmail('');
-        }}>
-          Continue Shopping
-        </button>
-      </div>
+  const gearBtn = (
+    <button className="gear-btn" onClick={openSettings} title="Store settings" aria-label="Store settings">⚙</button>
+  );
+  const configBanner = !config.configured ? (
+    <div className="config-banner">
+      <span>No gateway credentials configured — payments will fail until you add them.</span>
+      <button onClick={openSettings}>Open Settings</button>
     </div>
-  ) : (
-    <div className="container">
-      <div className="app-header">
-        <button
-          className="back-link"
-          onClick={() => {
-            setStage(STAGES.STORE);
-            setStoreView({ page: 'cart' });
-            setEvents([]);
-            setError(null);
-          }}
-          title="Back to cart"
-        >← Back</button>
-        <div className="app-header-dot" />
-        <h1 className="app-title">TechGear Checkout</h1>
-        <span className="app-subtitle">Hosted Session</span>
-      </div>
+  ) : null;
 
-      <div className="info-grid">
-        <div className="info-card info-card--wide">
-          <span className="info-card-label">Amount</span>
-          <span className="info-card-value info-card-amount">{amount} <em>{config.currency}</em></span>
-        </div>
-        <div className="info-card info-card--wide">
-          <span className="info-card-label">Gateway</span>
-          <span className="info-card-value info-card-mono">{config.gatewayHost}</span>
-        </div>
-        {order && (
-          <>
-            <div className="info-card info-card--wide">
-              <span className="info-card-label">Order ID</span>
-              <span className="info-card-value info-card-mono">{order.orderId}</span>
-            </div>
-            <div className="info-card info-card--wide">
-              <span className="info-card-label">Session ID</span>
-              <span className="info-card-value info-card-mono" style={{ fontSize: 10 }}>{order.sessionId}</span>
-            </div>
-          </>
-        )}
-      </div>
-
-      {stage !== STAGES.C2P_NEW_CARD && (
-      <>
-      {/* ── Email-based flow (returning shopper, no cookie) ─────── */}
-      <div className="email-section">
-        <label className="email-label">
-          Email address <span className="email-required">*</span>
-        </label>
-        <div className="email-row">
-          <input
-            type="email"
-            className="email-input"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            disabled={stage !== STAGES.IDLE && stage !== STAGES.ERROR && stage !== STAGES.C2P_READY}
-          />
-          {stage === STAGES.C2P_READY && (
-            <button className="btn-lookup" onClick={lookupCustomer}>Lookup</button>
-          )}
-        </div>
-        <p className="email-help">
-          We'll use your email to find cards already saved in your Click to Pay wallet.
-        </p>
-      </div>
-
-      {stage === STAGES.IDLE || stage === STAGES.ERROR ? (
-        <button onClick={() => startCheckout('email')} disabled={!isValidEmail(email)}>
-          {isValidEmail(email) ? 'Continue with Email' : 'Enter email to continue'}
-        </button>
-      ) : stage === STAGES.C2P_READY ? (
-        <button onClick={checkoutWithExistingCard}>Checkout with existing card</button>
-      ) : (
-        <button disabled className="btn-processing">
-          <span className="btn-spinner" /> Processing…
-        </button>
-      )}
-
-      {/* ── Alternate flows (only shown before checkout starts) ── */}
-      {(stage === STAGES.IDLE || stage === STAGES.ERROR) && (
-        <div className="alt-flows">
-          <div className="alt-flows-divider"><span>or</span></div>
-
-          <button
-            className="alt-flow-btn alt-flow-btn--cookie"
-            onClick={() => startCheckout('cookie')}
-          >
-            <span className="alt-flow-icon">🍪</span>
-            <span className="alt-flow-text">
-              <span className="alt-flow-title">Use saved card</span>
-              <span className="alt-flow-sub">If you've shopped here before with Click to Pay</span>
-            </span>
-          </button>
-
-          <button
-            className="alt-flow-btn alt-flow-btn--new"
-            onClick={() => startCheckout('new')}
-          >
-            <span className="alt-flow-icon">＋</span>
-            <span className="alt-flow-text">
-              <span className="alt-flow-title">Add a new card</span>
-              <span className="alt-flow-sub">First time using Click to Pay — enrol a card</span>
-            </span>
-          </button>
-        </div>
-      )}
-      </>
-      )}
-
-      {/* ── New-card enrollment: Hosted Session fields → checkoutWithNewCard ── */}
-      {stage === STAGES.C2P_NEW_CARD && (
-        <div className="new-card-form">
-          <h3 className="new-card-title">Enrol a new card</h3>
-          <p className="new-card-sub">
-            Enter your card details. We'll save it to your Click to Pay wallet for faster checkout next time.
-          </p>
-
-          <label className="card-label">Card number</label>
-          <input id="nc-number" className="card-input card-input--full" readOnly />
-
-          <div className="card-row card-row--three">
-            <div>
-              <label className="card-label">Exp. month</label>
-              <input id="nc-exp-month" className="card-input" placeholder="MM" readOnly />
-            </div>
-            <div>
-              <label className="card-label">Exp. year</label>
-              <input id="nc-exp-year" className="card-input" placeholder="YY" readOnly />
-            </div>
-            <div>
-              <label className="card-label">CVV</label>
-              <input id="nc-cvv" className="card-input" placeholder="123" readOnly />
-            </div>
-          </div>
-
-          <label className="card-label">Name on card</label>
-          <input id="nc-name" className="card-input card-input--full" readOnly />
-
-          <button className="store-pay-button" onClick={submitNewCard} disabled={newCardBusy}>
-            {newCardBusy
-              ? <><span className="btn-spinner" /> Processing…</>
-              : <>Pay {amount} {config.currency} &amp; enrol</>}
-          </button>
-
-          {newCardStatus && <div className="status error">⚠ {newCardStatus}</div>}
-        </div>
-      )}
-
-      {/* Hidden during new-card enrollment: a recognized device auto-renders its saved
-          wallet here, which is confusing on an "enrol a new card" screen. */}
-      <SdkPlaceholder id="c2p-cardList" label="Card list will appear here" active={sdkActive} hidden={stage === STAGES.C2P_NEW_CARD} />
-      <SdkPlaceholder id="c2p-otp"      label="OTP input will appear here"  active={sdkActive} hidden={stage === STAGES.C2P_NEW_CARD} />
-      <div id="c2p-dcf" />
-
-      {error && <div className="status error">⚠ {error}</div>}
-    </div>
+  const isReceipt = stage === STAGES.PAID && payResult?.ok;
+  const devDrawer = (
+    <DevDrawer
+      open={devOpen}
+      setOpen={setDevOpen}
+      events={events}
+      onClear={() => setEvents([])}
+      info={[
+        ['Amount', amount && money(Number(amount), config.currency)],
+        ['Gateway', config.gatewayHost],
+        ['Order ID', order?.orderId],
+        ['Session ID', order?.sessionId],
+      ]}
+    />
   );
 
-  if (isReceipt) {
-    return (
-      <div className="layout-with-panel">
-        {gearBtn}
-        <main className="layout-with-panel-main">{checkoutColumn}</main>
-        <ApiPanel events={events} onClear={() => setEvents([])} />
-        {settingsOverlay}
-      </div>
+  let page = null;
+  if (storeView.page === 'settings') {
+    page = <Settings defaults={config} onBack={() => goStore({ page: 'home' })} onSaved={refreshConfig} />;
+  } else if (isReceipt) {
+    page = (
+      <>
+        <ReceiptPage
+          lines={checkoutLines}
+          amount={amount}
+          currency={config.currency}
+          email={email}
+          orderId={order?.orderId}
+          scheme={paidScheme}
+          gatewayCode={payResult.gatewayCode}
+          onContinue={() => { setEmail(''); goStore({ page: 'home' }); }}
+          onOpenDev={() => setDevOpen(true)}
+        />
+        {devDrawer}
+      </>
+    );
+  } else if (stage !== STAGES.STORE) {
+    page = (
+      <>
+        <CheckoutPage
+          stage={stage}
+          email={email}
+          setEmail={setEmail}
+          emailValid={isValidEmail(email)}
+          onStart={startCheckout}
+          onLookup={lookupCustomer}
+          onExisting={checkoutWithExistingCard}
+          onSubmitNewCard={submitNewCard}
+          newCardBusy={newCardBusy}
+          newCardStatus={newCardStatus}
+          error={error}
+          lines={checkoutLines}
+          amount={amount}
+          currency={config.currency}
+          onBack={() => goStore({ page: 'cart' })}
+          onOpenDev={() => setDevOpen(true)}
+        />
+        {devDrawer}
+      </>
     );
   }
 
   return (
-    <div className="layout-single">
-      {gearBtn}
-      {configBanner}
-      {checkoutColumn}
-      {settingsOverlay}
-    </div>
+    <Storefront
+      view={storeView}
+      go={goStore}
+      cart={cart}
+      setCart={setCart}
+      currency={config.currency}
+      banner={configBanner}
+      gearBtn={gearBtn}
+      onCheckout={() => {
+        setCheckoutLines(cart);
+        setAmount(cartTotal(cart).toFixed(2));
+        setPaidScheme(null);
+        setError(null);
+        setEvents([]);
+        setStage(STAGES.IDLE);
+        window.scrollTo({ top: 0 });
+      }}
+    >
+      {page}
+    </Storefront>
   );
 }

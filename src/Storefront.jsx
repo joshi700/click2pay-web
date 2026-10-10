@@ -89,13 +89,13 @@ const COLLECTIONS = [
 
 const CATEGORIES = ['Computers', 'Peripherals', 'Gadgets'];
 
-const findProduct = (id) => PRODUCTS.find((p) => p.id === id);
+export const findProduct = (id) => PRODUCTS.find((p) => p.id === id);
 
 export function cartTotal(cart) {
   return cart.reduce((sum, line) => sum + (findProduct(line.id)?.price || 0) * line.qty, 0);
 }
 
-function money(n, currency) {
+export function money(n, currency) {
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'currency', currency, minimumFractionDigits: n % 1 ? 2 : 0,
@@ -105,7 +105,7 @@ function money(n, currency) {
   }
 }
 
-const Icon = ({ name, filled, className = '' }) => (
+export const Icon = ({ name, filled, className = '' }) => (
   <span className={`material-symbols-outlined ${filled ? 'filled' : ''} ${className}`} aria-hidden="true">{name}</span>
 );
 
@@ -151,7 +151,7 @@ function Header({ cartCount, query, onQuery, go }) {
             <Icon name="shopping_cart" />
             {cartCount > 0 && <span className="tg-badge">{cartCount}</span>}
           </button>
-          <button className="tg-icon-btn" aria-label="Account" title="Accounts are coming soon">
+          <button className="tg-icon-btn" onClick={() => go({ page: 'settings' })} aria-label="Store settings" title="Store settings">
             <Icon name="person" />
           </button>
         </div>
@@ -555,8 +555,44 @@ function Cart({ cart, setQty, currency, onCheckout, go }) {
   );
 }
 
+// Subtle one-line guide for first-time visitors of the demo. Dismissal is remembered
+// per browser; storage can be unavailable (private mode), so failures are ignored.
+const STRIP_KEY = 'tg.demoStrip.dismissed';
+
+function DemoStrip({ go }) {
+  const [hidden, setHidden] = useState(() => {
+    try { return localStorage.getItem(STRIP_KEY) === '1'; } catch { return false; }
+  });
+  if (hidden) return null;
+  const dismiss = () => {
+    setHidden(true);
+    try { localStorage.setItem(STRIP_KEY, '1'); } catch { /* ignore */ }
+  };
+  return (
+    <div className="tg-strip">
+      <div className="tg-wrap tg-strip-inner">
+        <span className="tg-strip-tag">Demo</span>
+        <ol className="tg-strip-steps">
+          <li><b>1</b> Pick a product</li>
+          <li><b>2</b> Add it to your cart</li>
+          <li><b>3</b> Pay with Click to Pay at checkout</li>
+        </ol>
+        <span className="tg-strip-hint">Open <em>Developer view</em> at checkout to watch the API calls.</span>
+        <button className="tg-strip-link" onClick={() => go({ page: 'settings' })}>
+          <Icon name="tune" /> Gateway settings
+        </button>
+        <button className="tg-strip-close" onClick={dismiss} aria-label="Dismiss demo guide">
+          <Icon name="close" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Shell ─────────────────────────────────────────────────────
-export default function Storefront({ view, go, cart, setCart, currency, onCheckout, banner, gearBtn }) {
+// `children` replaces the built-in pages — App uses it for checkout, receipt and
+// settings so those render inside the same header / footer.
+export default function Storefront({ view, go, cart, setCart, currency, onCheckout, banner, gearBtn, children }) {
   const [query, setQuery] = useState('');
   const [wishlist, setWishlist] = useState([]);
   const [aiOpen, setAiOpen] = useState(false);
@@ -590,11 +626,13 @@ export default function Storefront({ view, go, cart, setCart, currency, onChecko
     <div className="tg">
       {banner}
       <Header cartCount={cartCount} query={query} onQuery={setQuery} go={navigate} />
+      {view.page === 'home' && !children && <DemoStrip go={navigate} />}
       <main>
-        {view.page === 'home' && <Home {...shared} />}
-        {view.page === 'shop' && <Shop {...shared} category={view.category} query={query} />}
-        {view.page === 'product' && <ProductPage key={view.id} {...shared} id={view.id} inCart={cart.some((l) => l.id === view.id)} addToCart={addToCart} />}
-        {view.page === 'cart' && <Cart cart={cart} setQty={setQty} currency={currency} onCheckout={onCheckout} go={navigate} />}
+        {children}
+        {!children && view.page === 'home' && <Home {...shared} />}
+        {!children && view.page === 'shop' && <Shop {...shared} category={view.category} query={query} />}
+        {!children && view.page === 'product' && <ProductPage key={view.id} {...shared} id={view.id} inCart={cart.some((l) => l.id === view.id)} addToCart={addToCart} />}
+        {!children && view.page === 'cart' && <Cart cart={cart} setQty={setQty} currency={currency} onCheckout={onCheckout} go={navigate} />}
       </main>
       <Footer go={navigate} />
 
