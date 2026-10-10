@@ -1,21 +1,22 @@
 import React, { useState } from 'react';
 import { getSettings, saveSettings, clearSettings } from './settings.js';
+import { Icon } from './Storefront.jsx';
 
-// Configuration Settings — lets the merchant point the demo at any Mastercard
+// Store Settings page — lets the merchant point the demo at any Mastercard
 // Gateway MID from the browser. Values are stored in localStorage (see
 // settings.js) and sent as x-c2p-* headers on every backend request.
 //
 // Props:
 //   defaults  — the config the backend currently resolves (from /api/config),
 //               used to show placeholder hints of the .env fallback.
-//   onClose   — dismiss without re-fetching.
+//   onBack    — leave the page (back to the store).
 //   onSaved   — called after save/reset so the app can re-fetch /api/config.
 // Default API base URL when the merchant hasn't set one (Mastercard MTF).
 const DEFAULT_HOST = 'https://mtf.gateway.mastercard.com/';
 // Derive the API username from the Merchant ID, per gateway convention.
 const deriveUsername = (mid) => (mid.trim() ? `merchant.${mid.trim()}` : '');
 
-export default function Settings({ defaults = {}, onClose, onSaved }) {
+export default function Settings({ defaults = {}, onBack, onSaved }) {
   const saved = getSettings();
   const [form, setForm] = useState({
     merchantId: saved.merchantId || '',
@@ -70,84 +71,108 @@ export default function Settings({ defaults = {}, onClose, onSaved }) {
     defaults.username || (form.merchantId ? `merchant.${form.merchantId}` : 'merchant.YOUR_MERCHANT_ID');
 
   return (
-    <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-modal" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-head">
-          <div>
-            <h2 className="settings-title">Configuration Settings</h2>
-            <p className="settings-subtitle">Point the demo at your Mastercard Gateway MID</p>
-          </div>
-          <button className="settings-close" onClick={onClose} aria-label="Close">×</button>
-        </div>
+    <section className="tg-wrap tg-settings">
+      <nav className="tg-crumbs">
+        <button onClick={onBack}>Home</button>
+        <span>/</span>
+        <span>Store Settings</span>
+      </nav>
 
-        <div className="settings-body">
-          <h3 className="settings-section-title">Payment Gateway Configuration</h3>
+      <div className="tg-settings-head">
+        <span className="tg-label">Demo configuration</span>
+        <h1 className="tg-page-title">Store Settings</h1>
+        <p className="tg-muted">Point this demo store at your Mastercard Gateway merchant.</p>
+      </div>
 
-          <label className="settings-label">Merchant ID</label>
+      <div className="tg-settings-grid">
+        <form className="tg-settings-form" onSubmit={(e) => { e.preventDefault(); handleSave(); }}>
+          <h3>Payment Gateway</h3>
+
+          <label className="tg-field-label" htmlFor="st-mid">Merchant ID</label>
           <input
-            className="settings-input"
+            id="st-mid"
+            className="tg-input"
             placeholder={defaults.merchantId || 'Enter Merchant ID'}
             value={form.merchantId}
             onChange={onMerchantId}
           />
 
-          <label className="settings-label">API Username</label>
+          <label className="tg-field-label" htmlFor="st-user">API Username</label>
           <input
-            className="settings-input"
+            id="st-user"
+            className="tg-input"
             placeholder={usernameHint}
             value={form.username}
             onChange={onUsername}
           />
-          <p className="settings-help">Leave blank to use <code>merchant.&lt;Merchant ID&gt;</code>.</p>
+          <p className="tg-help">Leave blank to use <code>merchant.&lt;Merchant ID&gt;</code>.</p>
 
-          <label className="settings-label">API Password</label>
-          <div className="settings-password-row">
+          <label className="tg-field-label" htmlFor="st-pass">API Password</label>
+          <div className="tg-email-row">
             <input
-              className="settings-input"
+              id="st-pass"
+              className="tg-input"
               type={showPassword ? 'text' : 'password'}
               placeholder="Enter API Password"
               value={form.password}
               onChange={set('password')}
               autoComplete="off"
             />
-            <button
-              type="button"
-              className="settings-eye"
-              onClick={() => setShowPassword((v) => !v)}
-            >
+            <button type="button" className="tg-btn tg-btn--outline" onClick={() => setShowPassword((v) => !v)}>
               {showPassword ? 'Hide' : 'Show'}
             </button>
           </div>
 
-          <label className="settings-label">API Base URL</label>
+          <label className="tg-field-label" htmlFor="st-host">API Base URL</label>
           <input
-            className="settings-input"
+            id="st-host"
+            className="tg-input"
             placeholder={defaults.gatewayHost ? `https://${defaults.gatewayHost}` : 'https://mtf.gateway.mastercard.com'}
             value={form.host}
             onChange={set('host')}
           />
 
-          <label className="settings-label">API Version</label>
+          <label className="tg-field-label" htmlFor="st-ver">API Version</label>
           <input
-            className="settings-input"
+            id="st-ver"
+            className="tg-input"
             placeholder={defaults.apiVersion || '100'}
             value={form.version}
             onChange={set('version')}
           />
 
-          {flash && <div className={`settings-flash settings-flash--${flash.kind}`}>{flash.msg}</div>}
+          {flash && <div className="tg-flash"><Icon name="check_circle" /> {flash.msg}</div>}
 
-          <div className="settings-actions">
-            <button className="settings-save" onClick={handleSave}>💾 Save Configuration</button>
-            <button className="settings-reset" onClick={handleReset}>Reset to defaults</button>
+          <div className="tg-settings-actions">
+            <button type="submit" className="tg-btn">Save Configuration</button>
+            <button type="button" className="tg-btn tg-btn--outline" onClick={handleReset}>Reset to defaults</button>
           </div>
+        </form>
 
-          <div className="settings-note">
-            🔒 <strong>Security:</strong> API credentials are stored locally in your browser and
-            sent to this demo's backend to call the gateway. Use integration/test credentials only.
+        <aside className="tg-settings-side">
+          <div className="tg-receipt-card">
+            <h3>Current Status</h3>
+            <div className={`tg-status ${defaults.configured ? 'is-ok' : 'is-warn'}`}>
+              <Icon name={defaults.configured ? 'check_circle' : 'error'} />
+              {defaults.configured ? 'Gateway credentials configured' : 'No gateway credentials yet'}
+            </div>
+            <dl className="tg-specs">
+              <div><dt>Merchant ID</dt><dd className="tg-mono">{defaults.merchantId || '—'}</dd></div>
+              <div><dt>Gateway</dt><dd className="tg-mono">{defaults.gatewayHost || '—'}</dd></div>
+              <div><dt>API version</dt><dd>{defaults.apiVersion || '—'}</dd></div>
+              <div><dt>Currency</dt><dd>{defaults.currency || '—'}</dd></div>
+            </dl>
           </div>
-        </div>
+          <p className="tg-settings-note">
+            <Icon name="lock" />
+            <span>
+              Credentials are stored only in this browser and sent to this demo's backend to call the
+              gateway. Use integration / test credentials only.
+            </span>
+          </p>
+          <button className="tg-btn tg-btn--outline tg-btn--block" onClick={onBack}>Back to store</button>
+        </aside>
       </div>
-    </div>
+    </section>
   );
 }
